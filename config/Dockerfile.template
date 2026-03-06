@@ -1,0 +1,30 @@
+FROM {base_image}
+
+# Install build-essential patterns and git
+RUN zypper --non-interactive refresh && \
+    zypper --non-interactive install -y \
+    curl {extra_packages}
+
+# Create a developer user (UID 1000) for rootless mapping
+RUN groupadd -g 1000 developer && \
+    useradd -m -u 1000 -g developer -s /bin/bash developer && \
+    echo "developer ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Pre-create internal volume paths to avoid root ownership issues
+# We keep the name 'opencode' inside for compatibility
+RUN mkdir -p /home/developer/.config/opencode \
+             /home/developer/.local/share/opencode \
+             /workspace && \
+    chown -R developer:developer /home/developer /workspace
+
+USER developer
+WORKDIR /workspace
+
+# Install opencode using official method (as developer user)
+RUN curl -fsSL https://opencode.ai/install | bash
+
+ENV PATH="/home/developer/.local/bin:${{PATH}}"
+ENV LANG=en_US.UTF-8
+ENV TERM=xterm-256color
+
+CMD ["/bin/bash", "--login", "-i", "-c", "opencode"]

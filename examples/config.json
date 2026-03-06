@@ -1,0 +1,4 @@
+{
+  "base_image": "opensuse/tumbleweed:latest",
+  "install": ["cmake", "ninja", "gcc-c++", "python3-pip"]
+}
