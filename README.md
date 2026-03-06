@@ -24,18 +24,18 @@ This tool allows you to spin up a sandboxed environment for your code in seconds
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/youruser/opencode-sandbox.git ~/.local/share/opencode-sandbox
+    git clone https://github.com/youruser/opencode-sandbox.git ~/workspace/opencode-sandbox
     ```
 
 2.  **Make the script executable:**
     ```bash
-    chmod +x ~/.local/share/opencode-sandbox/scripts/opencode-sandbox
+    chmod +x ~/workspace/scripts/opencode-sandbox
     ```
 
 3.  **Symlink to your Path:**
     ```bash
     mkdir -p ~/bin
-    ln -s ~/.local/share/opencode-sandbox/scripts/opencode-sandbox ~/bin/opencode-sandbox
+    ln -s ~/workspace/scripts/opencode-sandbox ~/bin/opencode-sandbox
     ```
 
 ---
