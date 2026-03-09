@@ -47,30 +47,40 @@ def get_workspace_hash(path):
 def load_template():
     return TEMPLATE_PATH.read_text()
 
-def load_sidecar_config(work_dir):
+def load_sidecar_config(work_dir, debug=False):
     sidecar = work_dir / ".opencode-sandbox.json"
-    defaults = {
+    cfg = {
         "base_image": "opensuse/tumbleweed:latest",
-        "install": []
+        "install": [],
+        "mounts": []
     }
     if sidecar.exists():
         try:
             with open(sidecar, 'r') as f:
-                defaults.update(json.load(f))
+                user_cfg = json.load(f)
+                cfg.update(user_cfg)
+            if debug:
+                print(f"📦 Loaded sidecar config: {sidecar}")
         except Exception as e:
             print(f"⚠️ Warning: Failed to parse sidecar: {e}")
-    return defaults
+    return cfg
 
 def main():
     parser = argparse.ArgumentParser(description="OpenCode Sandbox (Podman + openSUSE)")
     parser.add_argument("--rebuild", action="store_true", help="Force image rebuild")
     parser.add_argument("--dry-run", action="store_true", help="Show command without running")
+    parser.add_argument("--debug", action="store_true", help="Show debug information")
+    parser.add_argument("--root", action="store_true", help="Run container as root")
+    parser.add_argument("--include-dir", action="append", help="Include additional directory in /workspace (HostPath:ContainerPath)")
     parser.add_argument("cmd_args", nargs=argparse.REMAINDER, help="Arguments to pass to opencode")
     args = parser.parse_args()
 
     # 1. Setup Workspace Paths
     work_dir = Path.cwd().resolve()
     ws_hash = get_workspace_hash(work_dir)
+    
+    if args.debug:
+        print(f"DEBUG: work_dir={work_dir} | ws_hash={ws_hash}")
     
     # Global Config (Shared)
     xdg_config = XDG_CONFIG_HOME / "opencode-sandbox"
@@ -83,16 +93,23 @@ def main():
     xdg_config.mkdir(parents=True, exist_ok=True)
 
     # 2. Load Template & Config
-    cfg = load_sidecar_config(work_dir)
+    cfg = load_sidecar_config(work_dir, debug=args.debug)
+    if args.debug:
+        print(f"DEBUG: loaded cfg={cfg}")
     template_content = load_template()
     
     dockerfile_content = template_content.format(
-        base_image=cfg['base_image'],
-        extra_packages=" ".join(f"'{p}'" for p in cfg['install'])
+        base_image=cfg.get('base_image', 'opensuse/tumbleweed:latest'),
+        extra_packages=" ".join(f"'{p}'" for p in cfg.get('install', []))
     )
 
+    if args.dry_run or args.debug:
+        print(f"--- GENERATED DOCKERFILE ---\n{dockerfile_content}\n----------------------------")
+
     # 3. Image Versioning
-    content_hash = hashlib.md5(dockerfile_content.encode()).hexdigest()[:8]
+    # We hash both the generated Dockerfile AND the sidecar config to ensure any change triggers rebuild
+    content_hash_input = dockerfile_content + json.dumps(cfg, sort_keys=True)
+    content_hash = hashlib.md5(content_hash_input.encode()).hexdigest()[:8]
     image_tag = f"opencode-ws:{ws_hash}-{content_hash}"
     
     image_check = subprocess.run(["podman", "images", "-q", image_tag], capture_output=True).stdout
@@ -100,11 +117,11 @@ def main():
     if not image_check or args.rebuild:
         print(f"🔨 Building workspace image: {image_tag}")
         df_path = ws_meta_dir / "Dockerfile"
+        # Always write/overwrite the Dockerfile to ensure it matches current config
         df_path.write_text(dockerfile_content)
         subprocess.run(["podman", "build", "-t", image_tag, "-f", str(df_path), "."], check=True)
 
     # Check if this is the first run for this workspace
-    # We check if the meta directory only contains the Dockerfile we just wrote
     is_first_run = len(list(ws_meta_dir.iterdir())) <= 1
 
     # 4. Execute Sandbox
@@ -117,8 +134,34 @@ def main():
         "-v", f"{work_dir}:/workspace:Z",
         "-v", f"{xdg_config}:{internal_home}/.config/opencode:Z",
         "-v", f"{ws_meta_dir}:{internal_home}/.local/share/opencode:Z",
-        image_tag
     ]
+
+    # Add custom mounts from config
+    for m in cfg.get("mounts", []):
+        try:
+            host_p = Path(m["host"]).expanduser().resolve()
+            cont_p = m["container"]
+            podman_cmd.extend(["-v", f"{host_p}:{cont_p}:Z"])
+        except KeyError as e:
+            print(f"⚠️ Warning: Invalid mount configuration: missing {e}")
+
+    # Add extra directories from CLI
+    if args.include_dir:
+        for inc in args.include_dir:
+            if ":" in inc:
+                h_p, c_p = inc.split(":", 1)
+                h_p = Path(h_p).expanduser().resolve()
+                podman_cmd.extend(["-v", f"{h_p}:{c_p}:Z"])
+            else:
+                h_p = Path(inc).expanduser().resolve()
+                # Default to /mnt/name to avoid side effects on the host-mapped /workspace
+                podman_cmd.extend(["-v", f"{h_p}:/mnt/{h_p.name}:Z"])
+
+    if args.root:
+        podman_cmd.append("--user")
+        podman_cmd.append("root")
+
+    podman_cmd.append(image_tag)
 
     # If extra arguments are provided, append them to override the default CMD
     if args.cmd_args:
@@ -130,6 +173,8 @@ def main():
         print(f"🚀 Sandbox Active | Project: {work_dir.name} ({ws_hash})")
         if is_first_run:
             print("💡 First run for this workspace: OpenCode may perform a one-time database migration. Please wait...")
+        if args.debug:
+            print(f"DEBUG: podman_cmd={' '.join(podman_cmd)}")
         subprocess.run(podman_cmd)
 
 if __name__ == "__main__":

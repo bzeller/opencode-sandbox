@@ -12,9 +12,8 @@ This tool allows you to spin up a sandboxed environment for your code in seconds
     * **Isolated Workspace Data:** Project history, indexing, and caches are isolated per project in `${XDG_DATA_HOME}/opencode-sandbox/ws-<hash>`.
 * **Template Resolution:** Flexible `Dockerfile.template` resolution (Highest to Lowest priority):
     1.  `${XDG_CONFIG_HOME}/opencode-sandbox/Dockerfile.template`
-    2.  `scripts/Dockerfile.template` (Script directory)
-    3.  `config/Dockerfile.template` (Parent config directory)
-* **Sidecar Configuration:** Define your environment needs (base image, extra packages) per project using a `.opencode.json` file.
+    2.  `config/Dockerfile.template` (Parent config directory)
+* **Sidecar Configuration:** Define your environment needs (base image, extra packages) per project using a `.opencode-sandbox.json` file.
 * **Symlink-Safe:** Designed to be installed in a tool directory and symlinked to your `~/bin` or `/usr/local/bin`.
 * **Rootless Podman:** No daemon, no root privileges, and native file permission mapping using `--userns=keep-id`.
 
@@ -29,20 +28,20 @@ This tool allows you to spin up a sandboxed environment for your code in seconds
 
 2.  **Make the script executable:**
     ```bash
-    chmod +x ~/workspace/scripts/opencode-sandbox
+    chmod +x ~/workspace/opencode-sandbox/scripts/opencode-sandbox
     ```
 
 3.  **Symlink to your Path:**
     ```bash
     mkdir -p ~/bin
-    ln -s ~/workspace/scripts/opencode-sandbox ~/bin/opencode-sandbox
+    ln -s ~/workspace/opencode-sandbox/scripts/opencode-sandbox ~/bin/opencode-sandbox
     ```
 
 ---
 
 ## 📂 Project Configuration
 
-Add a `.opencode.json` file to any project directory to customize your sandbox:
+Add a `.opencode-sandbox.json` file to any project directory to customize your sandbox:
 
 ```json
 {
@@ -52,6 +51,10 @@ Add a `.opencode.json` file to any project directory to customize your sandbox:
     "ninja",
     "gcc-c++",
     "python3-pip"
+  ],
+  "mounts": [
+    { "host": "~/.gitconfig", "container": "/home/developer/.gitconfig" },
+    { "host": "~/.ssh", "container": "/home/developer/.ssh" }
   ]
 }
 ```
@@ -68,6 +71,9 @@ opencode-sandbox
 
 ### Options:
 * `--rebuild`: Force an image rebuild.
+* `--root`: Run as root (default: developer user).
+* `--include-dir`: Include additional directory (HostPath:ContainerPath or just HostPath for auto-mount in /mnt).
+* `--debug`: Show debug information (paths, config, generated Dockerfile).
 * `--dry-run`: Show the podman command without executing it.
 
 ---
@@ -86,6 +92,19 @@ opencode-sandbox opencode run "Summarize this project"
 If you need to explore the environment or run manual commands:
 ```bash
 opencode-sandbox /bin/bash
+```
+
+### Mount extra directories via CLI:
+```bash
+opencode-sandbox --include-dir ~/projects/shared-libs:/mnt/libs
+# Or auto-mounts to /mnt/my-data:
+opencode-sandbox --include-dir ~/my-data
+```
+
+### Run as Root:
+To perform system-wide changes or install packages:
+```bash
+opencode-sandbox --root zypper install -y htop
 ```
 
 ### Run other tools inside the sandbox:
