@@ -119,7 +119,11 @@ def main():
         df_path = ws_meta_dir / "Dockerfile"
         # Always write/overwrite the Dockerfile to ensure it matches current config
         df_path.write_text(dockerfile_content)
-        subprocess.run(["podman", "build", "-t", image_tag, "-f", str(df_path), "."], check=True)
+        try:
+            subprocess.run(["podman", "build", "-t", image_tag, "-f", str(df_path), "."], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Error: 'podman build' failed for {image_tag}")
+            sys.exit(e.returncode)
 
     # Check if this is the first run for this workspace
     is_first_run = len(list(ws_meta_dir.iterdir())) <= 1
