@@ -3,7 +3,7 @@ FROM {base_image}
 # Install build-essential patterns and git
 RUN zypper --non-interactive refresh && \
     zypper --non-interactive install -y \
-    curl {extra_packages}
+    curl
 
 # Create a developer user (UID 1000) for rootless mapping
 RUN groupadd -g 1000 developer && \
@@ -22,6 +22,9 @@ WORKDIR /workspace
 
 # Install opencode using official method (as developer user)
 RUN curl -fsSL https://opencode.ai/install | bash
+
+# Workspace-specific packages (Optimized layering: adding packages here won't rebuild OpenCode)
+RUN if [ -n "{extra_packages}" ]; then sudo zypper --non-interactive install -y {extra_packages}; fi
 
 ENV PATH="/home/developer/.local/bin:${{PATH}}"
 ENV LANG=en_US.UTF-8
