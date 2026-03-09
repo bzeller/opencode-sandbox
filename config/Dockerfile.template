@@ -3,7 +3,8 @@ FROM {base_image}
 # Install build-essential patterns and git
 RUN zypper --non-interactive refresh && \
     zypper --non-interactive install -y \
-    curl
+    git-core patterns-devel-base-devel_basis \
+    sudo shadow which curl
 
 # Create a developer user (UID 1000) for rootless mapping
 RUN groupadd -g 1000 developer && \
