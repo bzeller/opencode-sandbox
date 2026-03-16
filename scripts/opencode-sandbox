@@ -5,6 +5,7 @@ import subprocess
 import sys
 import hashlib
 import json
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -47,6 +48,29 @@ def get_workspace_hash(path):
 def load_template():
     return TEMPLATE_PATH.read_text()
 
+def version_tuple(v):
+    """Convert version string to tuple for comparison."""
+    try:
+        # Split by . and only take numeric parts to avoid 'v' or '-beta' issues
+        return tuple(map(int, (part for part in v.split('.') if part.isdigit())))
+    except:
+        return (0, 0, 0)
+
+def get_latest_opencode_version(debug=False):
+    """Fetch the latest version tag from GitHub."""
+    url = "https://api.github.com/repos/anomalyco/opencode/releases/latest"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "opencode-sandbox-cli"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            latest = data.get("tag_name", "").lstrip("v")
+            if debug:
+                print(f"DEBUG: Latest OpenCode version on GitHub: v{latest}")
+            return latest
+    except Exception as e:
+        print(f"⚠️ Warning: Could not check for latest version: {e}")
+    return None
+
 def load_sidecar_config(work_dir, debug=False):
     sidecar = work_dir / ".opencode-sandbox.json"
     cfg = {
@@ -71,7 +95,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Show command without running")
     parser.add_argument("--debug", action="store_true", help="Show debug information")
     parser.add_argument("--root", action="store_true", help="Run container as root")
-    parser.add_argument("--include-dir", action="append", help="Include additional directory in /workspace (HostPath:ContainerPath)")
+    parser.add_argument("--update", action="store_true", help="Check for and install OpenCode updates")
+    parser.add_argument("--include-dir", action="append", help="Include additional directory in /mnt (HostPath:ContainerPath or just HostPath)")
     parser.add_argument("cmd_args", nargs=argparse.REMAINDER, help="Arguments to pass to opencode")
     args = parser.parse_args()
 
@@ -88,14 +113,12 @@ def main():
     xdg_data = XDG_DATA_HOME / "opencode-sandbox"
     ws_meta_dir = xdg_data / f"ws-{ws_hash}"
     
-    # Ensure host directories exist BEFORE podman run to prevent them having wrong permissions/user
+    # Ensure host directories exist
     ws_meta_dir.mkdir(parents=True, exist_ok=True)
     xdg_config.mkdir(parents=True, exist_ok=True)
 
     # 2. Load Template & Config
     cfg = load_sidecar_config(work_dir, debug=args.debug)
-    if args.debug:
-        print(f"DEBUG: loaded cfg={cfg}")
     template_content = load_template()
     
     dockerfile_content = template_content.format(
@@ -107,7 +130,6 @@ def main():
         print(f"--- GENERATED DOCKERFILE ---\n{dockerfile_content}\n----------------------------")
 
     # 3. Image Versioning
-    # We hash both the generated Dockerfile AND the sidecar config to ensure any change triggers rebuild
     content_hash_input = dockerfile_content + json.dumps(cfg, sort_keys=True)
     content_hash = hashlib.md5(content_hash_input.encode()).hexdigest()[:8]
     image_tag = f"opencode-ws:{ws_hash}-{content_hash}"
@@ -117,7 +139,6 @@ def main():
     if not image_check or args.rebuild:
         print(f"🔨 Building workspace image: {image_tag}")
         df_path = ws_meta_dir / "Dockerfile"
-        # Always write/overwrite the Dockerfile to ensure it matches current config
         df_path.write_text(dockerfile_content)
         try:
             subprocess.run(["podman", "build", "-t", image_tag, "-f", str(df_path), "."], check=True)
@@ -125,7 +146,7 @@ def main():
             print(f"❌ Error: 'podman build' failed for {image_tag}")
             sys.exit(e.returncode)
 
-    # Check if this is the first run for this workspace
+    # Check if this is the first run
     is_first_run = len(list(ws_meta_dir.iterdir())) <= 1
 
     # 4. Execute Sandbox
@@ -140,7 +161,7 @@ def main():
         "-v", f"{ws_meta_dir}:{internal_home}/.local/share/opencode:Z",
     ]
 
-    # Add custom mounts from config
+    # Add custom mounts
     for m in cfg.get("mounts", []):
         try:
             host_p = Path(m["host"]).expanduser().resolve()
@@ -158,7 +179,6 @@ def main():
                 podman_cmd.extend(["-v", f"{h_p}:{c_p}:Z"])
             else:
                 h_p = Path(inc).expanduser().resolve()
-                # Default to /mnt/name to avoid side effects on the host-mapped /workspace
                 podman_cmd.extend(["-v", f"{h_p}:/mnt/{h_p.name}:Z"])
 
     if args.root:
@@ -166,6 +186,33 @@ def main():
         podman_cmd.append("root")
 
     podman_cmd.append(image_tag)
+
+    # --- UPDATE LOGIC ---
+    if args.update:
+        latest_v = get_latest_opencode_version(debug=args.debug)
+        if not latest_v:
+            print("⚠️ Skipping update: Could not fetch latest version info.")
+        else:
+            # Run the container through login shell to check the current version
+            v_check_cmd = podman_cmd + ["/bin/bash", "--login", "-c", "opencode --version"]
+            try:
+                current_v_raw = subprocess.run(v_check_cmd, capture_output=True, text=True, check=True).stdout
+                current_v = current_v_raw.strip().split()[-1].lstrip("v")
+                
+                if version_tuple(current_v) >= version_tuple(latest_v):
+                    print(f"✅ OpenCode is already up to date (v{current_v}).")
+                    return
+                else:
+                    print(f"🔄 Updating OpenCode: v{current_v} -> v{latest_v}...")
+                    update_cmd = podman_cmd + ["/bin/bash", "-c", "curl -fsSL https://opencode.ai/install | bash"]
+                    subprocess.run(update_cmd, check=True)
+                    print("✨ Update complete! (Note: The update is persistent in your workspace data directory)")
+                    return
+            except Exception as e:
+                print(f"⚠️ Warning: Could not verify versions: {e}. Attempting update anyway.")
+                update_cmd = podman_cmd + ["/bin/bash", "-c", "curl -fsSL https://opencode.ai/install | bash"]
+                subprocess.run(update_cmd, check=True)
+                return
 
     # If extra arguments are provided, append them to override the default CMD
     if args.cmd_args:

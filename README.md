@@ -72,6 +72,7 @@ opencode-sandbox
 ### Options:
 * `--rebuild`: Force an image rebuild.
 * `--root`: Run as root (default: developer user).
+* `--update`: Check for and install OpenCode updates within the workspace.
 * `--include-dir`: Include additional directory (HostPath:ContainerPath or just HostPath for auto-mount in /mnt).
 * `--debug`: Show debug information (paths, config, generated Dockerfile).
 * `--dry-run`: Show the podman command without executing it.
